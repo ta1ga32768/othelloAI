@@ -5,47 +5,113 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Monte Carlo Othello Demo</title>
     <style>
-        body { font-family: sans-serif; background: #222; color: #fff; text-align: center; margin: 0; padding: 10px; }
-        canvas { background: #006600; border: 2px solid #fff; touch-action: none; max-width: 90vw; max-height: 90vw; }
-        .controls { margin: 15px 0; }
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: #1e1e1e; 
+            color: #fff; 
+            text-align: center; 
+            margin: 0; 
+            padding: 10px; 
+        }
+        h2 { margin: 10px 0 5px 0; font-size: 20px; }
+        #canvas-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 10px;
+        }
+        canvas { 
+            background: #228B22; 
+            border: 3px solid #000; 
+            touch-action: none; 
+            max-width: 95vw; 
+            max-height: 95vw; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .controls { 
+            background: #2a2a2a;
+            padding: 12px;
+            border-radius: 8px;
+            max-width: 400px;
+            margin: 0 auto 10px auto;
+        }
+        .slider-group { margin-bottom: 8px; }
         input[type=range] { width: 80%; }
-        .info { font-size: 14px; color: #ddd; }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            font-size: 14px;
+            border-radius: 4px;
+            margin: 4px;
+            cursor: pointer;
+        }
+        button:active { background: #005999; }
+        .info-panel {
+            font-size: 15px;
+            line-height: 1.4;
+        }
+        .status-text { font-weight: bold; color: #ffcc00; }
+        .win-rate { color: #90ee90; font-weight: bold; }
+        .result-text { font-size: 22px; font-weight: bold; margin-top: 5px; }
     </style>
 </head>
 <body>
 
-    <h2>モンテカルロ Othello AI</h2>
-    <canvas id="board" width="400" height="400"></canvas>
-
-    <div class="controls">
-        <label>試行数 (N): <span id="trialVal">1000</span></label><br>
-        <input type="range" id="trials" min="100" max="20000" step="100" value="1000">
+    <h2>Monte Carlo Othello AI</h2>
+    
+    <div id="canvas-container">
+        <canvas id="board" width="360" height="360"></canvas>
     </div>
 
-    <div class="info">
-        <p id="status">あなたの番です (黒)</p>
-        <p id="stats">Black: 2 | White: 2</p>
+    <div class="controls">
+        <div class="slider-group">
+            <label>AI Trials: <strong id="trialVal">5000</strong></label><br>
+            <input type="range" id="trials" min="100" max="50000" step="500" value="5000">
+        </div>
+        <button id="resetBtn">Reset Board</button>
+    </div>
+
+    <div class="info-panel">
+        <div id="aiStatus" class="status-text">あなたの番です (黒)</div>
+        <div id="rateInfo" class="win-rate">Win Rate: -</div>
+        <div id="score">Black (You): 2 | White (AI): 2</div>
+        <div id="gameResult" class="result-text"></div>
     </div>
 
 <script>
 const SIZE = 8;
-const CELL = 50;
+const CELL = 45; // 360 / 8
 let board = Array(SIZE).fill(0).map(() => Array(SIZE).fill(0));
-board[3][3] = 2; board[3][4] = 1; board[4][3] = 1; board[4][4] = 2;
+
+// 初期配置
+function initBoard() {
+    board = Array(SIZE).fill(0).map(() => Array(SIZE).fill(0));
+    board[3][3] = 2; board[3][4] = 1;
+    board[4][3] = 1; board[4][4] = 2;
+}
 
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const slider = document.getElementById("trials");
 const trialVal = document.getElementById("trialVal");
+const aiStatus = document.getElementById("aiStatus");
+const rateInfo = document.getElementById("rateInfo");
+const score = document.getElementById("score");
+const gameResult = document.getElementById("gameResult");
 
 slider.oninput = () => trialVal.innerText = slider.value;
 
+const DX = [-1, -1, -1, 0, 0, 1, 1, 1];
+const DY = [-1, 0, 1, -1, 1, -1, 0, 1];
+
 function isInside(x, y) { return x >= 0 && x < SIZE && y >= 0 && y < SIZE; }
 
-function canFlip(b, x, y, dx, dy, player) {
-    let opp = player === 1 ? 2 : 1;
+function canFlipDirection(b, x, y, dx, dy, player) {
+    let opponent = (player === 1) ? 2 : 1;
     let nx = x + dx, ny = y + dy;
-    if (!isInside(nx, ny) || b[nx][ny] !== opp) return false;
+    if (!isInside(nx, ny) || b[nx][ny] !== opponent) return false;
     nx += dx; ny += dy;
     while (isInside(nx, ny)) {
         if (b[nx][ny] === 0) return false;
@@ -55,121 +121,245 @@ function canFlip(b, x, y, dx, dy, player) {
     return false;
 }
 
-function isValid(b, x, y, player) {
+function isValidMove(b, x, y, player) {
     if (b[x][y] !== 0) return false;
-    const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-    return dirs.some(([dx, dy]) => canFlip(b, x, y, dx, dy, player));
+    for (let dir = 0; dir < 8; ++dir) {
+        if (canFlipDirection(b, x, y, DX[dir], DY[dir], player)) return true;
+    }
+    return false;
 }
 
-function getMoves(b, player) {
+function getValidMoves(b, player) {
     let moves = [];
-    for (let r=0; r<SIZE; r++)
-        for (let c=0; c<SIZE; c++)
-            if (isValid(b, r, c, player)) moves.push({x: r, y: c});
+    for (let i = 0; i < SIZE; ++i) {
+        for (let j = 0; j < SIZE; ++j) {
+            if (isValidMove(b, i, j, player)) moves.push({ x: i, y: j });
+        }
+    }
     return moves;
 }
 
 function makeMove(b, x, y, player) {
     let nb = b.map(row => [...row]);
-    let opp = player === 1 ? 2 : 1;
+    let opponent = (player === 1) ? 2 : 1;
     nb[x][y] = player;
-    const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-    dirs.forEach(([dx, dy]) => {
-        if (canFlip(b, x, y, dx, dy, player)) {
-            let nx = x + dx, ny = y + dy;
-            while (nb[nx][ny] === opp) {
+    for (let dir = 0; dir < 8; ++dir) {
+        if (canFlipDirection(b, x, y, DX[dir], DY[dir], player)) {
+            let nx = x + DX[dir], ny = y + DY[dir];
+            while (nb[nx][ny] === opponent) {
                 nb[nx][ny] = player;
-                nx += dx; ny += dy;
+                nx += DX[dir]; ny += DY[dir];
             }
         }
-    });
+    }
     return nb;
 }
 
-function simulate(b, startX, startY, player) {
-    let simB = makeMove(b, startX, startY, player);
-    let curr = player === 1 ? 2 : 1;
+function isGoodMove(x, y) {
+    return (x === 0 && y === 0) || (x === 7 && y === 7) || (x === 0 && y === 7) || (x === 7 && y === 0);
+}
+
+function isBadMove(x, y) {
+    if ((x === 1 && y === 1) || (x === 1 && y === 6) || (x === 6 && y === 1) || (x === 6 && y === 6)) return true;
+    if ((x === 0 && y === 1) || (x === 1 && y === 0) ||
+        (x === 0 && y === 6) || (x === 1 && y === 7) ||
+        (x === 6 && y === 0) || (x === 7 && y === 1) ||
+        (x === 6 && y === 7) || (x === 7 && y === 6)) return true;
+    return false;
+}
+
+function randomTool(max) {
+    return Math.floor(Math.random() * (max + 1));
+}
+
+function simulateGame(b, putX, putY, player) {
+    let simB = makeMove(b, putX, putY, player);
+    let enemy = (player === 1) ? 2 : 1;
     let pass = 0;
 
-    while (pass < 2) {
-        let moves = getMoves(simB, curr);
+    while (true) {
+        // enemy
+        let moves = getValidMoves(simB, enemy);
+        let safeIndices = [], niceIndices = [];
+        for (let i = 0; i < moves.length; ++i) {
+            if (!isBadMove(moves[i].x, moves[i].y)) safeIndices.push(i);
+            if (isGoodMove(moves[i].x, moves[i].y)) niceIndices.push(i);
+        }
+
         if (moves.length === 0) {
             pass++;
         } else {
-            pass = 0;
-            let m = moves[Math.floor(Math.random() * moves.length)];
-            simB = makeMove(simB, m.x, m.y, curr);
+            let p;
+            if (niceIndices.length > 0) {
+                p = moves[niceIndices[randomTool(niceIndices.length - 1)]];
+            } else if (safeIndices.length > 0) {
+                p = moves[safeIndices[randomTool(safeIndices.length - 1)]];
+            } else {
+                p = moves[randomTool(moves.length - 1)];
+            }
+            simB = makeMove(simB, p.x, p.y, enemy);
         }
-        curr = curr === 1 ? 2 : 1;
+
+        // me
+        moves = getValidMoves(simB, player);
+        if (moves.length === 0) {
+            pass++;
+            if (pass >= 2) break;
+        } else {
+            let p = moves[randomTool(moves.length - 1)];
+            simB = makeMove(simB, p.x, p.y, player);
+            pass = 0;
+        }
     }
 
     let count = 0;
-    for (let r=0; r<SIZE; r++)
-        for (let c=0; c<SIZE; c++)
-            if (simB[r][c] === player) count++;
-    return count > 32;
+    for (let i = 0; i < SIZE; i++)
+        for (let j = 0; j < SIZE; j++)
+            if (simB[i][j] === player) count++;
+
+    return count > (SIZE * SIZE) / 2.0;
 }
 
-function aiMove() {
-    let moves = getMoves(board, 2);
-    if (moves.length === 0) return;
+function runAiSimulation(trials) {
+    let moves = getValidMoves(board, 2);
+    if (moves.length === 0) return { decide: null, maxProb: 0 };
 
-    let N = parseInt(slider.value);
-    let wins = Array(moves.length).fill(0);
+    let safeIndices = [];
+    for (let i = 0; i < moves.length; ++i) {
+        if (!isBadMove(moves[i].x, moves[i].y)) safeIndices.push(i);
+    }
+    const hasSafeMoves = safeIndices.length > 0;
 
-    for (let i = 0; i < N; i++) {
-        let idx = Math.floor(Math.random() * moves.length);
-        if (simulate(board, moves[idx].x, moves[idx].y, 2)) {
-            wins[idx]++;
+    let victory = Array(moves.length).fill(0);
+    let defeat = Array(moves.length).fill(0);
+
+    for (let i = 0; i < trials; i++) {
+        let moveIdx = hasSafeMoves 
+            ? safeIndices[randomTool(safeIndices.length - 1)]
+            : randomTool(moves.length - 1);
+
+        let p = moves[moveIdx];
+        if (simulateGame(board, p.x, p.y, 2)) {
+            victory[moveIdx]++;
+        } else {
+            defeat[moveIdx]++;
         }
     }
 
-    let bestIdx = 0, maxRate = -1;
+    let maxProb = -1.0;
+    let decide = null;
     for (let i = 0; i < moves.length; i++) {
-        let rate = wins[i] / N;
-        if (rate > maxRate) {
-            maxRate = rate;
-            bestIdx = i;
+        let total = victory[i] + defeat[i];
+        if (total > 0) {
+            let rate = victory[i] / total;
+            if (rate > maxProb) {
+                decide = moves[i];
+                maxProb = rate;
+            }
         }
     }
-
-    board = makeMove(board, moves[bestIdx].x, moves[bestIdx].y, 2);
-    draw();
+    return { decide, maxProb };
 }
 
 function draw() {
-    ctx.clearRect(0, 0, 400, 400);
-    for (let r=0; r<SIZE; r++) {
-        for (let c=0; c<SIZE; c++) {
-            ctx.strokeStyle = "#000";
-            ctx.strokeRect(c*CELL, r*CELL, CELL, CELL);
+    ctx.clearRect(0, 0, 360, 360);
+    let blackCount = 0, whiteCount = 0;
 
-            if (board[r][c] !== 0) {
+    for (let i = 0; i < SIZE; ++i) {
+        for (let j = 0; j < SIZE; ++j) {
+            ctx.fillStyle = "#228B22";
+            ctx.fillRect(j * CELL, i * CELL, CELL, CELL);
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(j * CELL, i * CELL, CELL, CELL);
+
+            if (board[i][j] === 1) {
+                blackCount++;
                 ctx.beginPath();
-                ctx.arc(c*CELL + 25, r*CELL + 25, 20, 0, Math.PI*2);
-                ctx.fillStyle = board[r][c] === 1 ? "#000" : "#fff";
+                ctx.arc(j * CELL + CELL/2, i * CELL + CELL/2, CELL * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = "#000";
+                ctx.fill();
+            } else if (board[i][j] === 2) {
+                whiteCount++;
+                ctx.beginPath();
+                ctx.arc(j * CELL + CELL/2, i * CELL + CELL/2, CELL * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = "#fff";
                 ctx.fill();
             }
         }
     }
+
+    score.innerText = `Black (You): ${blackCount} | White (AI): ${whiteCount}`;
+
+    let humanCan = getValidMoves(board, 1).length > 0;
+    let aiCan = getValidMoves(board, 2).length > 0;
+
+    if (!humanCan && !aiCan) {
+        if (blackCount > whiteCount) gameResult.innerHTML = "<span style='color:#ffff00'>You Win!</span>";
+        else if (whiteCount > blackCount) gameResult.innerHTML = "<span style='color:#ff4444'>AI Wins!</span>";
+        else gameResult.innerHTML = "<span style='color:#00ffff'>Draw Game</span>";
+    } else {
+        gameResult.innerText = "";
+    }
+}
+
+let isAiThinking = false;
+
+function processTurn() {
+    draw();
+    let humanCan = getValidMoves(board, 1).length > 0;
+    let aiCan = getValidMoves(board, 2).length > 0;
+
+    if (!humanCan && aiCan && !isAiThinking) {
+        triggerAiMove();
+    }
+}
+
+function triggerAiMove() {
+    isAiThinking = true;
+    aiStatus.innerText = "AI Thinking...";
+    
+    // UI非同期化のためミリ秒待機
+    setTimeout(() => {
+        let trials = parseInt(slider.value);
+        let res = runAiSimulation(trials);
+        
+        if (res.decide && isValidMove(board, res.decide.x, res.decide.y, 2)) {
+            board = makeMove(board, res.decide.x, res.decide.y, 2);
+            rateInfo.innerText = `Highest Win Rate: Pos(${res.decide.x + 1}, ${res.decide.y + 1}) - ${(res.maxProb * 100).toFixed(1)}%`;
+        }
+        
+        isAiThinking = false;
+        aiStatus.innerText = "あなたの番です (黒)";
+        processTurn();
+    }, 100);
 }
 
 canvas.addEventListener("click", (e) => {
-    let rect = canvas.getBoundingClientRect();
-    let c = Math.floor((e.clientX - rect.left) / (rect.width / 8));
-    let r = Math.floor((e.clientY - rect.top) / (rect.height / 8));
+    if (isAiThinking) return;
 
-    if (isValid(board, r, c, 1)) {
-        board = makeMove(board, r, c, 1);
-        draw();
-        document.getElementById("status").innerText = "AI思考中...";
-        setTimeout(() => {
-            aiMove();
-            document.getElementById("status").innerText = "あなたの番です (黒)";
-        }, 100);
+    let rect = canvas.getBoundingClientRect();
+    let j = Math.floor((e.clientX - rect.left) / (rect.width / 8));
+    let i = Math.floor((e.clientY - rect.top) / (rect.height / 8));
+
+    if (isValidMove(board, i, j, 1)) {
+        board = makeMove(board, i, j, 1);
+        processTurn();
+        if (getValidMoves(board, 2).length > 0) {
+            triggerAiMove();
+        }
     }
 });
 
+document.getElementById("resetBtn").onclick = () => {
+    initBoard();
+    isAiThinking = false;
+    aiStatus.innerText = "あなたの番です (黒)";
+    rateInfo.innerText = "Win Rate: -";
+    draw();
+};
+
+initBoard();
 draw();
 </script>
 </body>
